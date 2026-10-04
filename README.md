@@ -7,25 +7,7 @@ A tiny macOS menu bar app that does two things:
 
 It is about 900 lines of Swift in two files, with no third-party packages.
 
-```
-Caffeinate: On until 3:45 PM
-Keep awake  1h  4h  8h  16h  1d  1w  ∞  Off
-Keep display awake  ◉
-────────────────────────────────────────────────
-Claude Max · you@example.com
-5h             ██░░░░░░░░  16%  resets in 1h 47m
-Wk             ██░░░░░░░░  21%  resets Sat 12:00 AM
-ChatGPT Pro · you@example.com
-Wk             ░░░░░░░░░░   0%  resets Sat 2:24 PM
-2 banked resets · next expires Oct 22 — Use One…
-Google AI Pro · you@example.com
-Gemini 5h      ░░░░░░░░░░   0%  resets in 3h 16m
-Gemini Wk      ░░░░░░░░░░   0%  resets Sun 10:19 AM
-────────────────────────────────────────────────
-✓ Close Menu After Choosing a Time
-Launch at Login
-Quit
-```
+<img src="screenshot.png" width="413" alt="The Demitasse menu: keep-awake durations, the display switch, and usage bars for Claude, ChatGPT and Google AI accounts">
 
 ## Install
 
