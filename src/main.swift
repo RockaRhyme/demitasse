@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var until: Date?  // when a timed session ends; nil when on indefinitely
     private let toggleItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let displaySwitch = MenuSwitch()
+    private let closeItem = NSMenuItem(title: "Close Menu After Choosing a Time", action: #selector(toggleClose), keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
     private var usage: [AccountUsage] = []
     private var usageFetched: Date?
@@ -57,6 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         display.view = displayRow
         menu.addItem(display)
         menu.addItem(.separator())
+        closeItem.target = self
+        menu.addItem(closeItem)
         loginItem.target = self
         menu.addItem(loginItem)
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
@@ -93,9 +96,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func turnOnFor(_ sender: NSButton) {
-        statusItem.menu?.cancelTracking()  // buttons in a menu don't close it themselves
+        if !keepMenuOpen { statusItem.menu?.cancelTracking() }  // buttons in a menu don't close it themselves
         stop()
         if sender.tag >= 0 { start(seconds: sender.tag == 0 ? nil : sender.tag * 3600) }
+        refresh()
+    }
+
+    // The menu closes after a duration is picked by default; turning that off leaves it open.
+    private var keepMenuOpen: Bool { UserDefaults.standard.bool(forKey: "keepMenuOpen") }
+
+    @objc private func toggleClose() {
+        UserDefaults.standard.set(!keepMenuOpen, forKey: "keepMenuOpen")
         refresh()
     }
 
@@ -150,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         toggleItem.title = isOn ? "Caffeinate: \(on)" : "Caffeinate: Off"  // status only; the buttons control it
         toggleItem.state = isOn ? .on : .off
         displaySwitch.isOn = !allowDisplaySleep
+        closeItem.state = keepMenuOpen ? .off : .on
     }
 
     // MARK: AI subscription usage

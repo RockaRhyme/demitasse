@@ -5,7 +5,7 @@ A tiny macOS menu bar app that does two things:
 1. **Keeps your Mac awake** for a set time: 1 hour, 4 hours, 8 hours, 16 hours, 1 day, 1 week, or until you turn it off.
 2. **Shows how much of your AI subscription limits you've used**, for the coding CLIs signed in on your Mac: Claude Code, Codex and Antigravity.
 
-It is about 860 lines of Swift in two files, with no third-party packages.
+It is about 900 lines of Swift in two files, with no third-party packages.
 
 ```
 Caffeinate: On until 3:45 PM
@@ -22,6 +22,7 @@ Google AI Pro · you@example.com
 Gemini 5h      ░░░░░░░░░░   0%  resets in 3h 16m
 Gemini Wk      ░░░░░░░░░░   0%  resets Sun 10:19 AM
 ────────────────────────────────────────────────
+✓ Close Menu After Choosing a Time
 Launch at Login
 Quit
 ```
@@ -42,7 +43,9 @@ cd demitasse
 
 ### Keep awake
 
-Click a duration in the **Keep awake** row. The cup icon fills while the Mac is being kept awake, and the top line shows when the session ends. **∞** keeps it awake until you click **Off** or quit.
+Click a duration in the **Keep awake** row. The cup icon fills while the Mac is being kept awake, and the top line shows when the session ends. **∞** keeps it awake until you click **Off** or quit. Picking another duration replaces the running session, and the new time counts from that click.
+
+The menu closes when you pick a duration. To leave it open instead, uncheck **Close Menu After Choosing a Time**.
 
 The **Keep display awake** switch under the durations decides whether the screen stays on too. It is on (green) by default; turn it off to let the display sleep while the Mac itself stays awake. Changing it during a session keeps the session's end time, and the choice is remembered.
 
