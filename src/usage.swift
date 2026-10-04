@@ -76,9 +76,11 @@ enum Usage {
                 let fresh = await renewClaude(service: account.service, seen: account.refresh)
                 token = fresh?.token
                 // Claude Code rewrote the entry after it was read, perhaps for another account, so
-                // the identity found above may not be this token's: look it up again.
-                if let fresh, fresh.changed, fresh.expires > Date(), let id = await claudeIdentity(fresh.token, plan: "") {
-                    row = AccountUsage(title: id[1])
+                // the identity found above may not be this token's. Drop it and look it up again;
+                // if that fails, a plain label beats showing the usage under the wrong name.
+                if let fresh, fresh.changed {
+                    let id = fresh.expires > Date() ? await claudeIdentity(fresh.token, plan: "") : nil
+                    row = AccountUsage(title: id?[1] ?? "Claude")
                     remembered[account.service] = id
                 }
             }
