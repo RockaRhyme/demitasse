@@ -5,11 +5,12 @@ A tiny macOS menu bar app that does two things:
 1. **Keeps your Mac awake** for a set time: 1 hour, 4 hours, 8 hours, 16 hours, 1 day, 1 week, or until you turn it off.
 2. **Shows how much of your AI subscription limits you've used**, for the coding CLIs signed in on your Mac: Claude Code, Codex and Antigravity.
 
-It is about 700 lines of Swift in two files, with no third-party packages.
+It is about 860 lines of Swift in two files, with no third-party packages.
 
 ```
 Caffeinate: On until 3:45 PM
 Keep awake  1h  4h  8h  16h  1d  1w  ∞  Off
+Keep display awake  ◉
 ────────────────────────────────────────────────
 Claude Max · you@example.com
 5h             ██░░░░░░░░  16%  resets in 1h 47m
@@ -43,6 +44,10 @@ cd demitasse
 
 Click a duration in the **Keep awake** row. The cup icon fills while the Mac is being kept awake, and the top line shows when the session ends. **∞** keeps it awake until you click **Off** or quit.
 
+The **Keep display awake** switch under the durations decides whether the screen stays on too. It is on (green) by default; turn it off to let the display sleep while the Mac itself stays awake. Changing it during a session keeps the session's end time, and the choice is remembered.
+
+A session never outlives the app: if Demitasse quits or crashes, the Mac goes back to sleeping normally.
+
 ### AI usage
 
 Each time you open the menu, Demitasse shows the usage windows for every account it finds, with the time each one resets. Results are reused for a minute, because the usage endpoints rate-limit.
@@ -71,7 +76,7 @@ The values are embedded in your own copy of the `agy` binary. You can list more 
 
 - **Unofficial.** Demitasse is not affiliated with or endorsed by Apple, Anthropic, OpenAI or Google.
 - **Undocumented endpoints.** The usage numbers come from the same private endpoints the CLIs themselves call. They can change or stop working without notice.
-- **It reads your CLI sign-ins, and sometimes rewrites them.** A live token is used as is. An expired Claude or ChatGPT token is renewed, and because those refresh tokens rotate, the new tokens are written back to the keychain entry or `auth.json` in the CLI's own format so the CLI stays signed in. Tokens are sent only to the vendor that issued them.
+- **It reads your CLI sign-ins, and sometimes rewrites them.** A live token is used as is. An expired Claude or ChatGPT token is renewed, and because those refresh tokens rotate, the new tokens are written back to the keychain entry or `auth.json` in the CLI's own format so the CLI stays signed in. If the CLI changed its sign-in while the renewal was under way, Demitasse leaves the CLI's version alone; if the write fails, the account row says so. Tokens are sent only to the vendor that issued them.
 - **Not sandboxed**, which is why it isn't on the Mac App Store.
 
 ## Command-line flags
