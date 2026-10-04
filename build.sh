@@ -6,7 +6,8 @@ cd "$(dirname "$0")"
 B="$(mktemp -d)"
 APP="$B/Demitasse.app"
 mkdir -p "$APP/Contents/MacOS"
-swiftc -O src/*.swift -o "$APP/Contents/MacOS/Demitasse"
+# Without an explicit target the binary only runs on the build machine's macOS or newer.
+swiftc -O -target "$(uname -m)-apple-macos13.0" src/*.swift -o "$APP/Contents/MacOS/Demitasse"
 cat > "$APP/Contents/Info.plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

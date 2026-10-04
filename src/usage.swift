@@ -44,12 +44,18 @@ enum Usage {
         let defaults = UserDefaults.standard
         var remembered = defaults.dictionary(forKey: "claudeIdentities") as? [String: [String]] ?? [:]
         var best: [String: (title: String, service: String, token: String, expires: Date)] = [:]
+        var expiredUnknown = false
         for service in services.sorted() {
             guard let raw = run("/usr/bin/security", ["find-generic-password", "-s", service, "-w"]),
                   let oauth = json(Data(raw.utf8))["claudeAiOauth"] as? [String: Any],
-                  let token = oauth["accessToken"] as? String else { continue }
-            let expires = Date(timeIntervalSince1970: (oauth["expiresAt"] as? Double ?? 0) / 1000)
+                  var token = oauth["accessToken"] as? String else { continue }
+            var expires = Date(timeIntervalSince1970: (oauth["expiresAt"] as? Double ?? 0) / 1000)
             var identity = claudeIdentityByToken[token]
+            // An expired sign-in that was never identified: renew it first so the profile lookup can run.
+            if identity == nil, remembered[service] == nil, expires <= Date(), let fresh = await renewClaude(service: service) {
+                (token, expires) = fresh
+                identity = claudeIdentityByToken[token]
+            }
             if identity == nil, expires > Date() {
                 let (status, profile) = await http("https://api.anthropic.com/api/oauth/profile", headers: claudeHeaders(token))
                 if status == 200, let email = (profile["account"] as? [String: Any])?["email"] as? String {
@@ -61,7 +67,10 @@ enum Usage {
                     remembered[service] = identity
                 }
             }
-            guard let id = identity ?? remembered[service], id.count == 2 else { continue }
+            guard let id = identity ?? remembered[service], id.count == 2 else {
+                if expires <= Date() { expiredUnknown = true }
+                continue
+            }
             if best[id[0]].map({ $0.expires < expires }) ?? true { best[id[0]] = (id[1], service, token, expires) }
         }
         defaults.set(remembered, forKey: "claudeIdentities")
@@ -69,7 +78,7 @@ enum Usage {
         var rows: [AccountUsage] = []
         for account in best.values.sorted(by: { $0.title < $1.title }) {
             var row = AccountUsage(title: account.title)
-            let token = account.expires > Date() && !forceRenew ? account.token : await renewClaude(service: account.service)
+            let token = account.expires > Date() && !forceRenew ? account.token : await renewClaude(service: account.service)?.token
             if let token {
                 let (status, body) = await http("https://api.anthropic.com/api/oauth/usage", headers: claudeHeaders(token))
                 if debug { print("claude: usage HTTP \(status):", body) }
@@ -98,20 +107,37 @@ enum Usage {
             } else {
                 row.note = "sign-in expired — sign in again in Claude Code"
             }
+            if unsavedClaude[account.service] != nil, row.note == nil {
+                row.note = "renewed sign-in couldn't be saved — Claude Code may ask you to sign in again"
+            }
             rows.append(row)
+        }
+        if rows.isEmpty, expiredUnknown {
+            rows.append(AccountUsage(title: "Claude", note: "sign-in expired — sign in again in Claude Code"))
         }
         return rows
     }
 
     // Renews an expired sign-in with its refresh token and stores the result back in the
     // keychain entry the way Claude Code does, keeping every other field of the entry.
-    private static func renewClaude(service: String) async -> String? {
+    private static func renewClaude(service: String) async -> (token: String, expires: Date)? {
         // Re-read first: a running Claude Code may have renewed it already.
-        guard let raw = run("/usr/bin/security", ["find-generic-password", "-s", service, "-w"]) else { return nil }
-        var stored = json(Data(raw.utf8))
-        guard var oauth = stored["claudeAiOauth"] as? [String: Any] else { return nil }
-        if !forceRenew, let token = oauth["accessToken"] as? String,
-           (oauth["expiresAt"] as? Double ?? 0) / 1000 > Date().timeIntervalSince1970 { return token }
+        guard var stored = readClaude(service), var oauth = stored["claudeAiOauth"] as? [String: Any] else { return nil }
+        let inKeychain = oauth["refreshToken"] as? String
+        if let pending = unsavedClaude[service] {
+            // An earlier renewal couldn't be saved. If the keychain still holds the refresh token
+            // it spent, carry on from the renewed tokens and try saving them again.
+            if pending.spent == inKeychain, let kept = pending.stored["claudeAiOauth"] as? [String: Any] {
+                (stored, oauth) = (pending.stored, kept)
+                if saveClaude(service, stored) { unsavedClaude[service] = nil }
+            } else {
+                unsavedClaude[service] = nil
+            }
+        }
+        if !forceRenew, let token = oauth["accessToken"] as? String {
+            let expires = claudeExpiry(oauth)
+            if expires > Date() { return (token, expires) }
+        }
         guard let refresh = oauth["refreshToken"] as? String, !refresh.isEmpty else { return nil }
 
         var request: [String: Any] = ["grant_type": "refresh_token", "refresh_token": refresh,
@@ -126,11 +152,37 @@ enum Usage {
         }
         oauth["accessToken"] = token
         if let rotated = body["refresh_token"] as? String { oauth["refreshToken"] = rotated }
-        oauth["expiresAt"] = Int((Date().timeIntervalSince1970 + (body["expires_in"] as? Double ?? 3600)) * 1000)
+        let expires = Date().addingTimeInterval(body["expires_in"] as? Double ?? 3600)
+        oauth["expiresAt"] = Int(expires.timeIntervalSince1970 * 1000)
         if let scope = body["scope"] as? String { oauth["scopes"] = scope.split(separator: " ").map(String.init) }
         stored["claudeAiOauth"] = oauth
 
-        guard let data = try? JSONSerialization.data(withJSONObject: stored, options: [.withoutEscapingSlashes]) else { return token }
+        // Claude Code may have renewed, switched account or signed out during the request;
+        // whatever it wrote wins over this renewal.
+        guard let current = readClaude(service)?["claudeAiOauth"] as? [String: Any] else { return nil }
+        if current["refreshToken"] as? String != inKeychain {
+            unsavedClaude[service] = nil
+            return (current["accessToken"] as? String).map { ($0, claudeExpiry(current)) }
+        }
+        let saved = saveClaude(service, stored)
+        unsavedClaude[service] = saved ? nil : (inKeychain ?? "", stored)
+        if debug { print("claude: renewed \(service), keychain write \(saved ? "ok" : "FAILED")") }
+        return (token, expires)
+    }
+
+    // Renewed entries whose keychain write failed, kept so the rotated refresh token isn't lost.
+    private static var unsavedClaude: [String: (spent: String, stored: [String: Any])] = [:]
+
+    private static func readClaude(_ service: String) -> [String: Any]? {
+        run("/usr/bin/security", ["find-generic-password", "-s", service, "-w"]).map { json(Data($0.utf8)) }
+    }
+
+    private static func claudeExpiry(_ oauth: [String: Any]) -> Date {
+        Date(timeIntervalSince1970: (oauth["expiresAt"] as? Double ?? 0) / 1000)
+    }
+
+    private static func saveClaude(_ service: String, _ stored: [String: Any]) -> Bool {
+        guard let data = try? JSONSerialization.data(withJSONObject: stored, options: [.withoutEscapingSlashes]) else { return false }
         let hex = data.map { String(format: "%02x", $0) }.joined()
         let command = "add-generic-password -U -a \"\(NSUserName())\" -s \"\(service)\" -X \"\(hex)\""
         // Via stdin keeps the secret out of the process list; `security -i` caps line length,
@@ -138,8 +190,7 @@ enum Usage {
         let saved = command.utf8.count < 4000
             ? run("/usr/bin/security", ["-i"], input: command + "\n")
             : run("/usr/bin/security", ["add-generic-password", "-U", "-a", NSUserName(), "-s", service, "-X", hex])
-        if debug { print("claude: renewed \(service), keychain write \(saved == nil ? "FAILED" : "ok")") }
-        return token
+        return saved != nil
     }
 
     private static func claudeHeaders(_ token: String) -> [String: String] {
@@ -187,6 +238,9 @@ enum Usage {
             row.windows.append(UsageWindow(label: label, usedPercent: used, resetsAt: resets))
         }
         if row.windows.isEmpty { row.note = "no usage limits reported" }
+        if unsavedCodex != nil, row.note == nil {
+            row.note = "renewed sign-in couldn't be saved — Codex may ask you to sign in again"
+        }
 
         if ((body["rate_limit_reset_credits"] as? [String: Any])?["available_count"] as? Int ?? 0) > 0 {
             let (code, banked) = await http(codexResetsURL, headers: headers)
@@ -229,8 +283,21 @@ enum Usage {
     private static func renewCodex() async -> String? {
         guard let data = FileManager.default.contents(atPath: codexAuthPath) else { return nil }
         var stored = json(data)
-        guard var tokens = stored["tokens"] as? [String: Any],
-              let refresh = tokens["refresh_token"] as? String, !refresh.isEmpty else { return nil }
+        guard var tokens = stored["tokens"] as? [String: Any] else { return nil }
+        let onDisk = tokens["refresh_token"] as? String
+        if let pending = unsavedCodex {
+            // An earlier renewal couldn't be saved. If auth.json still holds the refresh token
+            // it spent, carry on from the renewed tokens and try saving them again.
+            if pending.spent == onDisk, let kept = pending.stored["tokens"] as? [String: Any] {
+                (stored, tokens) = (pending.stored, kept)
+                if saveCodex(stored) { unsavedCodex = nil }
+                if !forceRenew, let token = tokens["access_token"] as? String,
+                   (jwtPayload(token)["exp"] as? Double ?? 0) > Date().timeIntervalSince1970 { return token }
+            } else {
+                unsavedCodex = nil
+            }
+        }
+        guard let refresh = tokens["refresh_token"] as? String, !refresh.isEmpty else { return nil }
         let request = ["client_id": "app_EMoamEEZ73f0CkXaXp7hrann",  // Codex's public client
                        "grant_type": "refresh_token", "refresh_token": refresh, "scope": "openid profile email"]
         let (status, body) = await http("https://auth.openai.com/oauth/token", method: "POST",
@@ -247,15 +314,28 @@ enum Usage {
         stamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         stored["last_refresh"] = stamp.string(from: Date())
 
-        // Owner-only temp file, then an atomic rename over auth.json.
-        let temp = codexAuthPath + ".demitasse-tmp"
-        var saved = false
-        if let out = try? JSONSerialization.data(withJSONObject: stored, options: [.prettyPrinted, .withoutEscapingSlashes]),
-           FileManager.default.createFile(atPath: temp, contents: out, attributes: [.posixPermissions: 0o600]) {
-            saved = rename(temp, codexAuthPath) == 0
+        // Codex may have renewed, switched account or signed out during the request;
+        // whatever it wrote wins over this renewal.
+        guard let current = codexTokens() else { return nil }
+        if current["refresh_token"] as? String != onDisk {
+            unsavedCodex = nil
+            return current["access_token"] as? String
         }
+        let saved = saveCodex(stored)
+        unsavedCodex = saved ? nil : (onDisk ?? "", stored)
         if debug { print("codex: renewed, auth.json write \(saved ? "ok" : "FAILED")") }
         return token
+    }
+
+    // A renewed auth.json whose write failed, kept so the rotated refresh token isn't lost.
+    private static var unsavedCodex: (spent: String, stored: [String: Any])?
+
+    private static func saveCodex(_ stored: [String: Any]) -> Bool {
+        // Owner-only temp file, then an atomic rename over auth.json.
+        let temp = codexAuthPath + ".demitasse-tmp"
+        guard let out = try? JSONSerialization.data(withJSONObject: stored, options: [.prettyPrinted, .withoutEscapingSlashes]),
+              FileManager.default.createFile(atPath: temp, contents: out, attributes: [.posixPermissions: 0o600]) else { return false }
+        return rename(temp, codexAuthPath) == 0
     }
 
     // MARK: Google — the Antigravity CLI (agy) sign-in in ~/.gemini/jetski-standalone-oauth-token
@@ -271,6 +351,7 @@ enum Usage {
     }
     private static var googleToken: (value: String, expires: Date)?
     private static var googleAccount: (project: String, title: String)?
+    private static var googleRefresh: String?  // the sign-in the two caches above belong to
     static let debug = CommandLine.arguments.contains("--debug")
     // `--renew` treats the Claude and ChatGPT tokens as expired, to exercise renewal.
     static let forceRenew = CommandLine.arguments.contains("--renew")
@@ -283,6 +364,12 @@ enum Usage {
         guard let refresh = (creds["refresh_token"] ?? creds["refreshToken"]) as? String else {
             if debug { print("antigravity: no refresh token; top-level keys:", stored.keys.sorted()) }
             return [AccountUsage(title: "Antigravity", note: "sign-in not readable")]
+        }
+
+        if refresh != googleRefresh {  // a different sign-in: drop the previous account's token and identity
+            googleRefresh = refresh
+            googleToken = nil
+            googleAccount = nil
         }
 
         let clients = googleClients
