@@ -76,7 +76,7 @@ The values are embedded in your own copy of the `agy` binary. You can list more 
 
 - **Unofficial.** Demitasse is not affiliated with or endorsed by Apple, Anthropic, OpenAI or Google.
 - **Undocumented endpoints.** The usage numbers come from the same private endpoints the CLIs themselves call. They can change or stop working without notice.
-- **It reads your CLI sign-ins, and sometimes rewrites them.** A live token is used as is. An expired Claude or ChatGPT token is renewed, and because those refresh tokens rotate, the new tokens are written back to the keychain entry or `auth.json` in the CLI's own format so the CLI stays signed in. If the CLI changed its sign-in while the renewal was under way, Demitasse leaves the CLI's version alone; if the write fails, the account row says so. Tokens are sent only to the vendor that issued them.
+- **It reads your CLI sign-ins, and sometimes rewrites them.** A live token is used as is. An expired Claude or ChatGPT token is renewed, and because those refresh tokens rotate, the new tokens are written back to the keychain entry or `auth.json` in the CLI's own format so the CLI stays signed in. If Demitasse sees that the CLI changed its sign-in while the renewal was under way, it leaves the CLI's version alone, but it shares no lock with the CLIs, so a CLI renewing at the same instant can still collide and leave that CLI needing a fresh sign-in. If the write fails, the account row says so. Tokens are sent only to the vendor that issued them.
 - **Not sandboxed**, which is why it isn't on the Mac App Store.
 
 ## Command-line flags
